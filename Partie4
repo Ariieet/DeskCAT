@@ -1,0 +1,244 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import find_peaks
+
+
+def readcsv3D(fname):
+    with open(fname) as f:
+        text = f.read()
+    text = text.replace(",", ".")
+    with open(fname, "w") as f:
+        f.write(text)
+    data = np.genfromtxt(fname, delimiter=". ", skip_header=1)
+    pixel = data[:,0]
+    values = data[:,1]
+    return np.array(pixel), np.array(values)
+
+
+def groupe_indx(liste, distance):
+    # Initialisation des groupes
+    groupes = []
+    # Initialisation du premier groupe avec la première valeur
+    groupe_actuel = [liste[0]]
+    # Parcours des valeurs à partir de la deuxième
+    for valeur in liste[1:]:
+        if abs(valeur - groupe_actuel[-1]) >= distance:
+            # Créer un nouveau groupe
+            groupes.append(groupe_actuel)
+            groupe_actuel = [valeur]  # Commencer un nouveau groupe avec la valeur actuelle
+        else:
+            # Ajouter la valeur au groupe actuel
+            groupe_actuel.append(valeur)
+
+    # Ajouter le dernier groupe
+    groupes.append(groupe_actuel)
+    return groupes
+
+
+def filtremin (liste_min, groupe_max):
+    minimums_filtres = []
+    # Parcours de chaque minimum
+    for minimum in liste_min:
+        # Vérifier si le minimum se trouve dans l'intervalle de l'un des groupes
+        for groupe in groupe_max:
+            if groupe[0] <= minimum <= groupe[-1]:
+                minimums_filtres.append(minimum)
+                break  # Sortir de la boucle interne si le minimum est trouvé dans un groupe
+    return minimums_filtres
+
+
+def indices_des_groupes(groupe, liste_origine):
+    indices_groupes = []
+    for g in groupe:
+        indices_groupe = []
+        for valeur in g:
+            indices_groupe.extend([i for i, val in enumerate(liste_origine) if val == valeur])
+        indices_groupes.append(indices_groupe)
+    return indices_groupes
+
+
+def groupes_heights(indices, origine):
+    groupes_heights = []
+    for groupe in indices:
+        groupe_actuel = []
+        for index in groupe:
+            for i in range(0, len(origine[0])):
+                if index == origine[0][i]:
+                    groupe_actuel.append(abs(origine[1]['peak_heights'][i]))
+        groupes_heights.append(groupe_actuel)
+
+    return groupes_heights
+
+def MTF(fname, distance, hauteurmax, hauteurmin):
+    pixel, values = readcsv3D(fname)[0], readcsv3D(fname)[1]
+
+    # trouver les indices des maximums et des minimums
+    max_index = find_peaks(values, height=hauteurmax)
+    min_index = find_peaks(-values, height=-hauteurmin)
+
+    # trouver les pixels des maxs et min (afin de les classer en groupe)
+    pixel_max = [pixel[i] for i in max_index[0]]
+    pixel_min = [pixel[i] for i in min_index[0]]
+
+    # Classement des maxs et mins trouver en groupe de pixel
+    groupe_pixel_max = groupe_indx(pixel_max, distance)
+    filtre_min = filtremin(pixel_min, groupe_pixel_max)
+    groupe_pixel_min = groupe_indx(filtre_min, distance)
+
+    # retourner chercher les indexes et les valeurs d'intensité correspondante
+    indices_max = indices_des_groupes(groupe_pixel_max, pixel)
+    indices_min = indices_des_groupes(groupe_pixel_min, pixel)
+
+    # trouver les intensités
+    groupe_intensite_max = groupes_heights(indices_max, max_index)
+    groupe_intensite_min = groupes_heights(indices_min, min_index)
+
+    # trouver max et min moyen pour cahque groupe et leur incertitude
+    max = []
+    sigma_max = []
+    for groupe in groupe_intensite_max:
+        max.append(np.mean(groupe))
+        sigma_max.append(np.std(groupe) / np.sqrt(len(groupe)))
+
+    min = []
+    sigma_min = []
+    for groupe in groupe_intensite_min:
+        min.append(np.mean(groupe))
+        sigma_min.append(np.std(groupe) / np.sqrt(len(groupe)))
+
+    # Ajouter les zéros à la fin de la liste
+    nombre_zeros_a_ajouter = 6 - len(min)
+    min.extend([0] * nombre_zeros_a_ajouter)
+    sigma_min.extend([0] * nombre_zeros_a_ajouter)
+
+    # calcul modulation
+    spatial_freq = [0.5, 0.67, 1, 1.3, 2, 4]
+    modulation = []
+    sigma_modulation = []
+    for i in range(0, len(spatial_freq)):
+        if min[i] == 0:
+            min[i] = max[i]
+
+        delta = max[i] - min[i]
+        somme = max[i] + min[i]
+        mod = delta / somme
+        modulation.append(abs(mod))
+
+        if modulation[i] != 0:
+            sigma_delta = sigma_max[i] - sigma_min[i]
+            sigma_somme = sigma_max[i] + sigma_min[i]
+            sigma_modulation.append(abs(np.sqrt((sigma_delta / delta)**2 + (sigma_somme / somme)**2) * mod))
+
+    # on divise par le plus grand élément de la liste modulation
+    mod_0 = np.max(modulation)
+    sigm_mod0 = sigma_modulation[modulation.index(mod_0)]
+    MTF = []
+    for i in range(0, len(modulation)):
+        MTF.append(modulation[i] / mod_0)
+
+    sigma_MTF = []
+    for j in range(0, len(sigma_modulation)):
+        sigma_MTF.append(np.sqrt((sigma_modulation[j] / modulation[j])**2 + (sigm_mod0 / mod_0)**2) * MTF[j])
+    # Ajouter les zéros à la fin de la liste
+    nombre_zeros_a_ajouter = 6 - len(sigma_MTF)
+    sigma_MTF.extend([np.nan] * nombre_zeros_a_ajouter)
+
+    return MTF, sigma_MTF
+#=
+######320 projections##########
+fname320_025 = "C:/Users/Ariette/Documents/6e session physique/Physex/Rapport a/Partie4/3d_line1_320_025.csv"
+fname320_05 = "C:/Users/Ariette/Documents/6e session physique/Physex/Rapport a/Partie4/3d_line1_320_05.csv"
+fname320_nof = "C:/Users/Ariette/Documents/6e session physique/Physex/Rapport a/Partie4/3d_line1_320_025_nof.csv"
+
+# pixel, values = readcsv3D(fname320_025)[0], readcsv3D(fname320_025)[1]
+# plt.plot(pixel, values)
+# plt.show()
+
+pixel, values = readcsv3D(fname320_nof)[0], readcsv3D(fname320_nof)[1]
+plt.rcParams.update({"font.size": 18, "font.family":"Times New Roman"})
+plt.figure(figsize=(8,6),dpi=200)
+plt.plot(pixel, values)
+plt.xlabel("Position [pixel]")
+plt.ylabel("Niveau de gris[-]")
+plt.tick_params(axis='x', direction = 'in')
+plt.tick_params(axis='y', direction = 'in')
+plt.show()
+
+spatial_freq = [0.5, 0.67, 1, 1.3, 2, 4]
+MTF320_025, sigma_MTF320_025 = MTF(fname320_025, 15, 1.2, 1.2)
+MTF320_05, sigma_MTF320_05 = MTF(fname320_05, 6, 0.5, 0.5)
+MTF320_nof, sigma_MTF320_nof = MTF(fname320_nof, 15, 4.5, 4.5)
+
+plt.rcParams.update({"font.size": 18, "font.family":"Times New Roman"})
+plt.figure(figsize=(8,6),dpi=200)
+plt.errorbar(spatial_freq, MTF320_025, yerr=sigma_MTF320_025, fmt='o', color='#034f84', ecolor='#034f84', capsize=5, alpha=0.6,  zorder=2)
+plt.scatter(spatial_freq, MTF320_025, marker= 'o', color='#034f84', label='Voxels de 0.25mm et filtre Hamming', alpha=1,  zorder=3)
+
+plt.errorbar(spatial_freq, MTF320_05, yerr=sigma_MTF320_05, fmt='v', color='#c83349', ecolor='#c83349', capsize=5, alpha=0.6,  zorder=1)
+plt.scatter(spatial_freq, MTF320_05, marker= 'v', color='#c83349', label='Voxels de 0.5mm et filtre Hamming', alpha=1,  zorder=3)
+
+plt.errorbar(spatial_freq, MTF320_nof, yerr=sigma_MTF320_nof, fmt='s', color='#feb236', ecolor='#feb236', capsize=5, alpha=0.6,  zorder=1)
+plt.scatter(spatial_freq, MTF320_nof, marker= 's', color='#feb236', label='Voxels de 0.25mm et sans filtre', alpha=1,  zorder=3)
+
+plt.xlabel('Fréquence spatiale [p/mm] ')
+plt.ylabel("MTF [-]")
+plt.tick_params(axis='x', direction = 'in')
+plt.tick_params(axis='y', direction = 'in')
+plt.legend()
+plt.show()
+
+########RAM##########
+
+fname40_ram = "C:/Users/Ariette/Documents/6e session physique/Physex/Rapport a/Partie4/3d_line1_40_025_ram.csv"
+fname160_ram = "C:/Users/Ariette/Documents/6e session physique/Physex/Rapport a/Partie4/3d_line1_160_025_ram.csv"
+
+
+# pixel, values = readcsv3D(fname160_ram)[0], readcsv3D(fname160_ram)[1]
+# plt.rcParams.update({"font.size": 18, "font.family":"Times New Roman"})
+# plt.figure(figsize=(8,6),dpi=200)
+# plt.plot(pixel, values)
+# plt.xlabel("Position [pixel]")
+# plt.ylabel("Intensité [niveau de gris]")
+# plt.show()
+
+spatial_freq = [0.5, 0.67, 1, 1.3, 2, 4]
+MTF40_ram, sigma_MTF40_ram = MTF(fname40_ram, 9, 0.7, 0.9)
+MTF160_ram, sigma_MTF160_ram = MTF(fname160_ram, 9, 1.2, 1.2)
+
+plt.rcParams.update({"font.size": 18, "font.family":"Times New Roman"})
+plt.figure(figsize=(8,6),dpi=200)
+plt.errorbar(spatial_freq, MTF40_ram, yerr=sigma_MTF40_ram, fmt='o', color='#034f84', ecolor='#034f84', capsize=5, alpha=0.6,  zorder=1)
+plt.scatter(spatial_freq, MTF40_ram, marker= 'o', color='#034f84', label='40 projections', alpha=1,  zorder=3)
+
+plt.errorbar(spatial_freq, MTF160_ram, yerr=sigma_MTF160_ram, fmt='v', color='#c83349', ecolor='#c83349', capsize=5, alpha=0.6,  zorder=1)
+plt.scatter(spatial_freq, MTF160_ram, marker= 'v', color='#c83349', label='160 projections', alpha=1,  zorder=3)
+
+plt.xlabel('Fréquence spatiale [p/mm] ')
+plt.ylabel("MTF [-]")
+plt.tick_params(axis='x', direction = 'in')
+plt.tick_params(axis='y', direction = 'in')
+plt.legend()
+plt.show()
+
+#### 2D #######
+# Pour run cette partie on doit inverser les signes dans find.peaks au ligne 75-76
+
+# fname2d = "C:/Users/Ariette/Documents/6e session physique/Physex/Rapport a/Partie4/2D_LIN1.csv"
+#
+# pixel, values = readcsv3D(fname2d)[0], readcsv3D(fname2d)[1]
+# plt.plot(pixel, values)
+# plt.show()
+#
+# spatial_freq = [0.5, 0.67, 1, 1.3, 2, 4]
+# MTF2d, sigma_MTF2d = MTF(fname2d, 15, 2.4e4, 2.4e4)
+#
+# plt.rcParams.update({"font.size": 18, "font.family":"Times New Roman"})
+# plt.figure(figsize=(8,6),dpi=200)
+# plt.errorbar(spatial_freq, MTF2d, yerr=sigma_MTF2d, fmt='o', color='#034f84', ecolor='#034f84', capsize=5, alpha=0.6)
+# plt.scatter(spatial_freq, MTF2d, marker= 'o', color='#034f84', alpha=1)
+#
+# plt.xlabel('Fréquence spatiale [p/mm] ')
+# plt.ylabel("MTF [-]")
+# plt.tick_params(axis='x', direction = 'in')
+# plt.tick_params(axis='y', direction = 'in')
+# plt.show()
